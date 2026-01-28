@@ -1,0 +1,21 @@
+# 임시 파일
+*_backup.md
+*_draft.md
+*_temp.*
+*_0.md
+
+# IDE 설정
+.vscode/
+.idea/
+*.code-workspace
+
+# OS 파일
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 분석 문서 (포트폴리오에 불필요)
+Job_Analysis_*.md
+
+# 개인 메모
+*.private.md

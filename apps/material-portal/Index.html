@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <?!= includeFile('Stylesheet') ?>
+</head>
+
+<body class="p-4 md:p-8">
+  <div class="max-w-7xl mx-auto">
+    <nav
+      class="flex gap-8 border-b border-slate-800 mb-8 text-slate-400 font-bold text-sm overflow-x-auto whitespace-nowrap scrollbar-hide"
+      id="main-nav" role="tablist" aria-label="메인 카테고리 메뉴"></nav>
+    <div id="sub-nav" class="flex flex-wrap gap-2 mb-8 min-h-[40px]"></div>
+    <div id="dashboard-summary" class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8 hidden">
+      <div class="market-card p-6 rounded-3xl tooltip-trigger">
+        <p class="text-[10px] text-slate-500 font-black uppercase mb-2 tracking-widest">Market Sentiment</p>
+        <div class="flex items-end justify-between mb-2">
+          <span id="sentiment-label" class="text-xl font-black text-white italic">--</span>
+          <span id="sentiment-ratio" class="text-xs font-bold text-slate-400">--</span>
+        </div>
+        <div class="w-full bg-slate-800 rounded-full flex overflow-hidden">
+          <div id="bull-bar" class="status-bar bg-rose-500" style="width: 50%"></div>
+          <div id="bear-bar" class="status-bar bg-blue-500" style="width: 50%"></div>
+        </div>
+        <div class="tooltip-content">
+          <strong>📊 시장 심리 지표</strong><br>
+          분석 대상(4T/유물) 중 전일 대비 상승한 품목 비중입니다.<br>
+          - <strong>OVERHEAT</strong>: 일시적 과열, 매도 고려<br>
+          - <strong>DECAYING</strong>: 하락 우세, 추가 관망 필요
+        </div>
+      </div>
+      <div class="market-card p-6 rounded-3xl flex flex-col justify-center tooltip-trigger">
+        <p class="text-[10px] text-slate-500 font-black uppercase mb-1 tracking-widest">Active Monitoring</p>
+        <p id="total-items" class="text-3xl font-black text-white italic">--</p>
+        <div class="tooltip-content">
+          <strong>🔍 집중 모니터링 대상</strong><br>
+          현재 4T 재련/보조 재료 및 유물 각인서 시트에서 실시간 트래킹 중인 핵심 자산의 수입니다.
+        </div>
+      </div>
+      <div class="market-card p-6 rounded-3xl flex flex-col justify-center tooltip-trigger">
+        <p class="text-[10px] text-slate-500 font-black uppercase mb-1 tracking-widest">Volatility Alert</p>
+        <p id="hot-item" class="text-lg font-bold text-purple-400 truncate">Monitoring...</p>
+        <div class="tooltip-content">
+          <strong>⚠️ 변동성 경보</strong><br>
+          최근 24시간 내 가장 급격한 시세 변화를 보인 아이템입니다. 갑작스러운 패치나 수급 불균형의 지표가 됩니다.
+        </div>
+      </div>
+    </div>
+    <div class="flex flex-col md:flex-row md:items-center justify-between border-b border-slate-800 mb-8 pb-2">
+      <nav class="flex gap-8 text-slate-400 font-bold text-sm overflow-x-auto whitespace-nowrap scrollbar-hide"
+        id="main-nav"></nav>
+      <div class="flex items-center gap-4 mt-2 md:mt-0">
+        <div class="flex items-center gap-2 bg-slate-800/40 px-3 py-1 rounded-lg border border-slate-700/50">
+          <span class="text-[9px] text-slate-500 font-black tracking-widest uppercase">Sentiment</span>
+          <div id="main-synergy-index" class="text-[10px] font-black tracking-tight">
+            <span class="text-slate-600 animate-pulse">Analyzing...</span>
+          </div>
+        </div>
+        <div id="last-update"
+          class="text-[10px] text-slate-500 font-mono flex items-center gap-2 border-l border-slate-800 pl-4">
+          <span class="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
+          <span class="hidden md:inline">LAST UPDATE:</span> <span id="update-time"
+            class="text-emerald-400 font-bold">--:--:--</span>
+        </div>
+      </div>
+    </div>
+    <div id="dashboard-view" class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-12 hidden">
+      <div class="bg-[#1c1f26] p-6 rounded-3xl border border-slate-800 shadow-lg">
+        <div class="tooltip-trigger inline-block mb-4">
+          <h4 class="text-rose-500 font-black text-xs uppercase flex items-center gap-2">
+            <span class="w-1.5 h-1.5 bg-rose-500 rounded-full animate-pulse"></span> Top Exit Opportunities (핵심 매도)
+          </h4>
+          <div class="tooltip-content">
+            <strong>🚀 매도 최적기 (Exit Strategy)</strong><br>
+            7일 평균가 대비 현재가가 가장 높게 형성된 아이템입니다. 장기 우하향 시장에서 일시적 반등 구간일 확률이 매우 높으므로, 보유 자산의 처분을 강력 권장합니다.
+          </div>
+        </div>
+        <div id="gainer-list" class="space-y-3"></div>
+      </div>
+      <div class="bg-[#1c1f26] p-6 rounded-3xl border border-slate-800 shadow-lg">
+        <div class="tooltip-trigger inline-block mb-4">
+          <h4 class="text-blue-500 font-black text-xs uppercase flex items-center gap-2">
+            <span class="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse"></span> Floor Price (단기 저점 / 매수)
+          </h4>
+          <div class="tooltip-content">
+            <strong>💎 바닥권 진입 (Floor Price)</strong><br>
+            7일 평균가 대비 가장 낮은 가격에 도달한 아이템입니다. 성장을 위해 재료를 '사용'하거나, 필요한 물품을 '매수'하기에 비용 효율이 가장 좋은 시점입니다.
+          </div>
+        </div>
+        <div id="loser-list" class="space-y-3"></div>
+      </div>
+    </div>
+    <div id="table-view-container"
+      class="hidden rounded-[32px] overflow-hidden bg-[#16191f] border border-slate-800 shadow-2xl">
+      <table class="w-full text-left text-sm">
+        <thead class="bg-[#1c1f26] text-slate-500 text-[10px] uppercase font-black tracking-widest">
+          <tr>
+            <th class="px-8 py-5 cursor-pointer hover:text-white" onclick="sortData('name')">Item Name</th>
+            <th class="px-8 py-5 text-right cursor-pointer hover:text-white" onclick="sortData('price')">Price</th>
+            <th class="px-8 py-5 text-right cursor-pointer hover:text-white opacity-80" onclick="sortData('prev')">
+              Yesterday</th>
+            <th class="px-4 py-5 text-center cursor-pointer hover:text-white" onclick="sortData('gap')">Trend Signal
+            </th>
+            <th class="px-8 py-5 text-center cursor-pointer hover:text-white" onclick="sortData('diff')">Change</th>
+          </tr>
+        </thead>
+        <tbody id="table-body" class="divide-y divide-slate-800/40"></tbody>
+      </table>
+    </div>
+  </div>
+  <div id="chartModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle"
+    onclick="if(event.target.id==='chartModal')closeModal()">
+    <div
+      class="bg-[#1c1f26] mx-auto mt-4 p-6 md:p-8 rounded-[40px] max-w-5xl border border-slate-700/50 relative shadow-2xl"
+      onclick="event.stopPropagation()">
+      <button onclick="closeModal()" aria-label="닫기"
+        class="absolute top-6 right-8 text-slate-500 hover:text-white text-3xl z-[110] transition-colors leading-none">&times;</button>
+
+
+      <div class="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-6 pr-10">
+        <div>
+          <div class="flex items-center gap-3 mb-1">
+            <h3 id="modalTitle" class="text-3xl font-black text-white italic uppercase tracking-tighter leading-none">
+            </h3>
+            <span id="sales-badge" class="px-2 py-0.5 rounded text-[9px] font-bold"></span>
+          </div>
+          <p id="modalPeriod" class="text-slate-500 text-[10px] font-medium tracking-tight opacity-70"></p>
+        </div>
+      </div>
+
+      <div id="skeletonView" class="space-y-6">
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div class="skeleton h-[85px] rounded-[22px]"></div>
+          <div class="skeleton h-[85px] rounded-[22px]"></div>
+          <div class="skeleton h-[85px] rounded-[22px]"></div>
+          <div class="skeleton h-[85px] rounded-[22px]"></div>
+        </div>
+        <div class="skeleton h-[400px] rounded-[32px]"></div>
+      </div>
+
+      <div id="realView" class="hidden opacity-0 transition-opacity duration-500 space-y-6">
+
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+          <div id="trend-signal"
+            class="tooltip-trigger p-4 rounded-[22px] border border-slate-800 bg-[#0f1115] flex flex-col items-center justify-center min-h-[85px]">
+            <div id="trend-content" class="flex flex-col items-center"></div>
+            <div class="tooltip-content">
+              <strong>💡 트렌드 가이드</strong><br>
+              모멘텀과 이격도를 분석하여 최적의 타이밍을 제안합니다.
+            </div>
+          </div>
+          <div
+            class="bg-[#0f1115] p-4 rounded-[22px] border border-slate-800 flex flex-col items-center justify-center min-h-[85px] tooltip-trigger">
+            <p class="text-[9px] text-indigo-400 font-black uppercase mb-1 tracking-[0.2em] opacity-70">Best
+              Day to Exit</p>
+            <p id="best-day" class="text-xl font-black text-white italic tracking-tight">--</p>
+            <div class="tooltip-content">
+              <strong>📅 요일별 고점 통계</strong><br>
+              과거 데이터를 분석하여 해당 아이템이 평균적으로 가장 높은 가격을 형성했던 요일입니다. 장기 하락장 속에서 가장 '덜 손해보고' 팔 수 있는 타이밍입니다.
+            </div>
+          </div>
+          <div
+            class="bg-[#0f1115] p-4 rounded-[22px] border border-slate-800 flex flex-col items-center justify-center min-h-[85px] tooltip-trigger">
+            <p class="text-[9px] text-amber-400 font-black uppercase mb-1 tracking-[0.2em] opacity-70">Decay
+              Velocity</p>
+            <p id="momentum-val" class="text-xl font-black text-white italic tracking-tight">-- %</p>
+            <div class="tooltip-content">
+              <strong>📉 하락 가속도 (Momentum)</strong><br>
+              최근 가격 변화의 속도입니다.<br>
+              (+)일 경우 하락세 둔화 또는 반등 신호, (-)일 경우 하락세 강화 신호입니다.
+            </div>
+          </div>
+          <div
+            class="bg-[#0f1115] p-4 rounded-[22px] border border-slate-800 flex flex-col items-center justify-center min-h-[85px] tooltip-trigger">
+            <p class="text-[9px] text-emerald-400 font-black uppercase mb-1 tracking-[0.2em] opacity-70">
+              Real Asset Value</p>
+            <div class="flex items-baseline gap-1">
+              <p id="real-value-num" class="text-xl font-black text-white italic tracking-tight">--</p>
+              <span class="text-[9px] text-slate-500 font-bold">BC</span>
+            </div>
+            <div class="tooltip-content">
+              <strong>⚖️ 실질 가치 (BC 환산)</strong><br>
+              현재 크리스탈 시세를 반영한 가치입니다. 골드 인플레이션에 따른 착시를 제거합니다.
+            </div>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap items-center justify-between gap-3 mb-5 px-4">
+          <div class="flex items-center gap-5">
+            <div class="flex items-center gap-2">
+              <div class="w-4 h-1 bg-[#a855f7] rounded-full shadow-[0_0_10px_rgba(168,85,247,0.5)]"></div>
+              <span class="text-[11px] font-black text-slate-200 tracking-tight uppercase">Current</span>
+            </div>
+            <div class="group relative flex items-center gap-2">
+              <div class="w-4 h-0 border-t-2 border-dashed border-slate-500"></div>
+              <span class="text-[11px] font-bold text-slate-400 tracking-tight uppercase">MA7 Trend</span>
+              <span
+                class="cursor-help flex items-center justify-center w-4 h-4 rounded-full border border-slate-700 text-[10px] text-slate-500 group-hover:border-purple-500 group-hover:text-purple-400 transition-all">?</span>
+              <div
+                class="absolute left-0 top-7 hidden group-hover:block z-[100] w-64 p-4 bg-[#1e222a] border border-slate-700 rounded-2xl shadow-2xl animate-in fade-in zoom-in duration-200">
+                <p class="text-[11px] text-slate-300 leading-relaxed">
+                  <strong class="text-purple-400 block mb-1">📈 7일 이동평균선(MA7) 가이드</strong>
+                  일주일간의 가격 흐름을 평균 낸 <span class="text-white font-bold">심리적 기준선</span>입니다.<br><br>
+                  - <span class="text-rose-400 font-bold">실선이 위</span>: 과열 구간 (<span class="underline">매도</span> 고려)<br>
+                  - <span class="text-blue-400 font-bold">실선이 아래</span>: 저점 구간 (<span class="underline">매수</span> 권장)
+                </p>
+              </div>
+            </div>
+          </div>
+          <div class="flex items-center gap-2 bg-slate-800/50 px-3 py-1.5 rounded-xl border border-slate-700">
+            <span class="text-[9px] text-slate-500 font-bold uppercase tracking-wider">Sector
+              Sentiment</span>
+            <div id="synergy-index" class="text-[10px] font-black italic">--</div>
+          </div>
+        </div>
+
+        <div class="flex items-center justify-between gap-4 px-2 mb-4">
+          <div class="flex bg-[#0f1115] p-1 rounded-xl border border-slate-800">
+            <button id="btn-gold" onclick="switchChartMode('GOLD')"
+              class="px-3 py-1.5 rounded-lg text-[9px] font-black bg-slate-800 text-white transition-all">GOLD</button>
+            <button id="btn-real" onclick="switchChartMode('REAL')"
+              class="px-3 py-1.5 rounded-lg text-[9px] font-black text-slate-500 hover:text-white transition-all">REAL
+              (BC)</button>
+          </div>
+          <div class="flex bg-[#0f1115] p-1 rounded-xl border border-slate-800 ml-auto" id="period-selector">
+            <button onclick="changePeriod(7)"
+              class="period-btn px-3 py-1.5 rounded-lg text-[10px] font-black text-slate-500">7D</button>
+            <button onclick="changePeriod(30)"
+              class="period-btn px-3 py-1.5 rounded-lg text-[10px] font-black text-slate-500">30D</button>
+            <button onclick="changePeriod(90)"
+              class="period-btn px-3 py-1.5 rounded-lg text-[10px] font-black text-slate-500">90D</button>
+            <button onclick="changePeriod(0)"
+              class="period-btn px-3 py-1.5 rounded-lg text-[10px] font-black text-slate-500">ALL</button>
+          </div>
+        </div>
+
+        <div class="h-[340px] w-full bg-[#0f1115] rounded-[32px] p-6 border border-slate-800 relative group mb-6">
+          <canvas id="itemChart"></canvas>
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3" id="stat-cards"></div>
+      </div>
+    </div>
+  </div>
+  <?!= includeFile('JavaScript') ?>
+</body>
+
+</html>

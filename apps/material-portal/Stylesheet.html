@@ -1,0 +1,205 @@
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@400;600;700;900&display=swap');
+
+    body {
+        font-family: 'Pretendard', sans-serif;
+        background-color: #0d0f12;
+        color: #e2e8f0;
+        -webkit-font-smoothing: antialiased;
+    }
+
+    .nav-active {
+        color: #a855f7 !important;
+        border-bottom: 2px solid #a855f7;
+    }
+
+    .sub-active {
+        background: #a855f7 !important;
+        color: white !important;
+        border-color: #a855f7 !important;
+    }
+
+    .modal {
+        display: none;
+        position: fixed;
+        z-index: 100;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.92);
+        backdrop-filter: blur(20px);
+        overflow-y: auto;
+    }
+
+    .skeleton {
+        background: linear-gradient(90deg, #1c1f26 25%, #2d3139 50%, #1c1f26 75%);
+        background-size: 200% 100%;
+        animation: loading 1.5s infinite;
+    }
+
+    @keyframes loading {
+        0% {
+            background-position: 200% 0;
+        }
+
+        100% {
+            background-position: -200% 0;
+        }
+    }
+
+    .period-btn.active {
+        background: #a855f7;
+        color: white;
+        box-shadow: 0 0 15px rgba(168, 85, 247, 0.4);
+    }
+
+    .market-card {
+        background: linear-gradient(145deg, #1c1f26, #16191f);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .status-bar {
+        height: 4px;
+        border-radius: 2px;
+        transition: width 0.8s ease-in-out;
+    }
+
+    scrollbar-hide::-webkit-scrollbar {
+        display: none;
+    }
+
+    /* 툴팁 핵심 스타일: display와 z-index 보강 */
+    .tooltip-trigger {
+        position: relative;
+        cursor: pointer;
+    }
+
+    .tooltip-content {
+        display: none;
+        position: absolute;
+        bottom: 125%;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #1e293b;
+        color: #fff;
+        padding: 14px;
+        border-radius: 12px;
+        width: 250px;
+        font-size: 11px;
+        z-index: 500 !important;
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.8);
+        border: 1px solid #475569;
+        line-height: 1.6;
+        text-align: left;
+        pointer-events: none;
+        font-weight: 400;
+    }
+
+    .tooltip-trigger:hover .tooltip-content {
+        display: block !important;
+        opacity: 1;
+        animation: fadeIn 0.2s ease;
+    }
+
+    .dash-tooltip {
+        bottom: 110% !important;
+        width: 260px !important;
+    }
+
+    @keyframes fadeIn {
+        from {
+            opacity: 0;
+            transform: translateX(-50%) translateY(5px);
+        }
+
+        to {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+    }
+
+    /* 확실한 신호 (Gap 7% 이상) 효과 */
+    @keyframes pulse-red {
+        0% {
+            box-shadow: 0 0 0 0 rgba(244, 63, 94, 0.4);
+            border-color: rgba(244, 63, 94, 0.7);
+        }
+
+        70% {
+            box-shadow: 0 0 0 10px rgba(244, 63, 94, 0);
+            border-color: rgba(244, 63, 94, 0.3);
+        }
+
+        100% {
+            box-shadow: 0 0 0 0 rgba(244, 63, 94, 0);
+            border-color: rgba(244, 63, 94, 0.7);
+        }
+    }
+
+    @keyframes pulse-blue {
+        0% {
+            box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4);
+            border-color: rgba(59, 130, 246, 0.7);
+        }
+
+        70% {
+            box-shadow: 0 0 0 10px rgba(59, 130, 246, 0);
+            border-color: rgba(59, 130, 246, 0.3);
+        }
+
+        100% {
+            box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+            border-color: rgba(59, 130, 246, 0.7);
+        }
+    }
+
+    .strong-signal-rose {
+        animation: pulse-red 2s infinite;
+        border-width: 1.5px !important;
+    }
+
+    .strong-signal-blue {
+        animation: pulse-blue 2s infinite;
+        border-width: 1.5px !important;
+    }
+
+    .signal-badge {
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 9px;
+        font-weight: 900;
+        text-transform: uppercase;
+        margin-left: 6px;
+        vertical-align: middle;
+    }
+
+    /* P0 Improvement: Toast Notification */
+    .toast {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        background: #1e293b;
+        color: white;
+        padding: 16px 24px;
+        border-radius: 12px;
+        border-left: 4px solid #ef4444;
+        /* Default: Error Red */
+        opacity: 0;
+        transform: translateY(20px);
+        transition: all 0.3s ease;
+        z-index: 9999;
+        font-weight: 600;
+        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+    }
+
+    .toast.show {
+        opacity: 1;
+        transform: translateY(0);
+    }
+
+    .toast.toast-success {
+        border-left-color: #10b981;
+        /* Success Green */
+    }
+</style>

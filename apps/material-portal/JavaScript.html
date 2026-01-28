@@ -1,0 +1,725 @@
+<script>
+    let rawData = [], displayItems = [], fullDetailData = [], itemMappingTable = {};
+    let currentMainCat = "", currentSub = "전체", sortState = { key: 'price', asc: false };
+    let myChart = null;
+    let currentViewMode = 'GOLD';
+    let currentQuotes = 7000;
+    let refreshInterval = null;
+    const REFRESH_TIME = 5 * 60 * 1000; // 5분 (밀리초)
+
+    const crosshairPlugin = {
+        id: 'crosshair',
+        afterDraw: (chart) => {
+            if (chart.tooltip?._active?.length) {
+                const { ctx, chartArea: { top, bottom, left, right } } = chart;
+                const activePoint = chart.tooltip._active[0];
+                const x = activePoint.element.x; const y = activePoint.element.y;
+                ctx.save(); ctx.beginPath(); ctx.setLineDash([5, 5]); ctx.lineWidth = 1;
+                ctx.strokeStyle = 'rgba(168, 85, 247, 0.4)';
+                ctx.moveTo(x, top); ctx.lineTo(x, bottom); ctx.moveTo(left, y); ctx.lineTo(right, y);
+                ctx.stroke(); ctx.restore();
+            }
+        }
+    };
+
+    const getKrDay = (label) => {
+        const match = label.match(/\(([^)]+)\)/);
+        if (!match) return label;
+        const engDay = match[1];
+        const map = { 'Sun': '일', 'Mon': '월', 'Tue': '화', 'Wed': '수', 'Thu': '목', 'Fri': '금', 'Sat': '토' };
+        return label.replace(engDay, map[engDay] || engDay);
+    };
+
+    window.onload = () => {
+        google.script.run.withSuccessHandler(map => {
+            itemMappingTable = map;
+            initNav();
+            startAutoRefresh();
+            setupKeyboardAccess(); // [P2] 키보드 접근성 초기화
+        }).getItemCategoryMap();
+    };
+
+    /**
+     * [P2 Improvement] 키보드 접근성 설정
+     * - ESC 키로 모달 닫기
+     */
+    function setupKeyboardAccess() {
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                const modal = document.getElementById('chartModal');
+                if (modal.style.display === 'block') {
+                    closeModal();
+                }
+            }
+        });
+    }
+
+    function initNav() {
+        google.script.run.withSuccessHandler(configs => {
+            const nav = document.getElementById('main-nav');
+            // 대시보드 버튼 생성
+            const dashBtn = createNavBtn("DASHBOARD", () => { toggleView(true); loadDashboard(); });
+            nav.appendChild(dashBtn);
+
+            // 나머지 카테고리 버튼 생성
+            Object.keys(configs).forEach(cat => {
+                nav.appendChild(createNavBtn(cat, () => { toggleView(false); renderSubNav(configs[cat]); loadData(cat); }));
+            });
+
+            // [핵심] 첫 로딩 시 대시보드를 활성화하고 데이터를 불러옴
+            dashBtn.classList.add('nav-active');
+            toggleView(true); // 뷰 전환 먼저
+            loadDashboard();  // 데이터 로드
+        }).getConfig();
+    }
+
+    /**
+     * 5분마다 데이터를 자동으로 갱신하는 타이머
+     */
+    function startAutoRefresh() {
+        if (refreshInterval) clearInterval(refreshInterval);
+
+        refreshInterval = setInterval(() => {
+            // 현재 활성화된 뷰에 따라 적절한 데이터 로드
+            const dashView = document.getElementById('dashboard-view');
+            const isDashVisible = dashView && (dashView.style.display === 'grid' || !dashView.classList.contains('hidden'));
+            console.log(`⏰ 정기 데이터 갱신 (${isDashVisible ? '대시보드' : '리스트'}) - ${new Date().toLocaleTimeString()}`);
+
+            if (isDashVisible) {
+                loadDashboard(); // 대시보드 갱신
+            } else if (currentMainCat) {
+                loadData(currentMainCat); // 현재 보고 있는 카테고리 리스트 갱신
+            }
+        }, REFRESH_TIME);
+    }
+
+    function updateRefreshTimestamp(serverTime) {
+        const timeElement = document.getElementById('update-time');
+        if (!timeElement) return;
+
+        timeElement.innerText = serverTime || new Date().toLocaleTimeString('ko-KR', { hour12: false });;
+        // 시각적 피드백: 갱신될 때 살짝 반짝이게 처리 (Tailwind 활용)
+        timeElement.classList.add('text-white');
+        setTimeout(() => timeElement.classList.remove('text-white'), 500);
+    }
+
+    function createNavBtn(text, onClick) {
+        const btn = document.createElement('button');
+        btn.innerText = text; btn.className = "pb-3 px-1 main-btn hover:text-white transition-all font-black uppercase tracking-tighter text-xs";
+        btn.onclick = (e) => {
+            document.querySelectorAll('.main-btn').forEach(b => b.classList.remove('nav-active'));
+            e.target.classList.add('nav-active');
+            onClick();
+        };
+        return btn;
+    }
+
+    function toggleView(isDash) {
+        document.getElementById('dashboard-view').style.display = isDash ? 'grid' : 'none';
+        document.getElementById('dashboard-summary').classList.toggle('hidden', !isDash);
+        document.getElementById('table-view-container').classList.toggle('hidden', isDash);
+        if (isDash) document.getElementById('sub-nav').innerHTML = '';
+    }
+
+    /**
+     * 메인 대시보드 데이터를 로드하고 분석 지수를 업데이트합니다.
+     */
+    function loadDashboard() {
+        const gList = document.getElementById('gainer-list'), lList = document.getElementById('loser-list');
+
+        // 1. UI 피드백 (스켈레톤 또는 불투명도 조절)
+        if (gList.children.length === 0 || gList.innerHTML.includes('skeleton')) {
+            gList.innerHTML = lList.innerHTML = `
+          <div class="p-8 text-center text-slate-600 w-full">
+            <div class="skeleton h-24 rounded-2xl w-full mb-4"></div>
+            <p class="text-[10px] animate-pulse font-black uppercase tracking-widest">분석 엔진 가동 중...</p>
+          </div>`;
+        } else {
+            // 자동 갱신 시에는 부드러운 불투명도 효과만 적용
+            gList.style.opacity = lList.style.opacity = "0.5";
+        }
+
+        google.script.run.withSuccessHandler(data => {
+            gList.style.opacity = lList.style.opacity = "1";
+            updateRefreshTimestamp(data.updateTime);
+
+            if (!data || data.totalCount === 0) {
+                gList.innerHTML = lList.innerHTML = `
+            <div class="p-8 text-center text-slate-500 text-xs">
+              유의미한 시장 신호가 없습니다.
+            </div>`;
+                return;
+            }
+
+            // 2. 리스트 렌더링 (Progressive Rendering)
+            gList.style.opacity = '0';
+            lList.style.opacity = '0';
+            gList.innerHTML = renderDashItems(data.gainers, 'rose');
+            lList.innerHTML = renderDashItems(data.losers, 'blue', true);
+
+            // Frame request for smooth fade-in
+            requestAnimationFrame(() => {
+                gList.style.transition = 'opacity 0.5s ease-out';
+                lList.style.transition = 'opacity 0.5s ease-out';
+                gList.style.opacity = '1';
+                lList.style.opacity = '1';
+            });
+
+            // 3. 기존 대시보드 요약 정보 업데이트
+            updateDashboardSummary(data);
+
+            // 4. [추가] 시장 동조화 지수(Synergy Index) 통합 분석
+            const allSignals = [...(data.gainers || []), ...(data.losers || [])];
+            if (allSignals.length > 0) {
+                updateSynergyIndex(allSignals);
+            }
+        }).getDashboardData();
+    }
+
+    function updateDashboardSummary(data) {
+        const all = [...data.gainers, ...data.losers];
+        if (all.length === 0) {
+            document.getElementById('sentiment-label').innerText = "NO DATA";
+            return;
+        }
+
+        const bullCount = data.gainers.filter(i => i.diff > 0).length;
+        const bullRatio = Math.round((bullCount / all.length) * 100);
+
+        document.getElementById('bull-bar').style.width = `${bullRatio}%`;
+        document.getElementById('bear-bar').style.width = `${100 - bullRatio}%`;
+
+        // 로아식 감성 분석: 재련 재료/각인서 가격이 오르면 '시장 과열'
+        document.getElementById('sentiment-label').innerText = bullRatio > 60 ? "OVERHEAT" : (bullRatio < 30 ? "PANIC" : "STABLE");
+        document.getElementById('sentiment-ratio').innerText = `${bullRatio}% UP / ${(100 - bullRatio)}% DOWN`;
+        document.getElementById('total-items').innerText = `${data.totalCount} Core Items`;
+
+        const hot = all.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff))[0];
+        if (hot) document.getElementById('hot-item').innerText = `${hot.name} (${hot.diff > 0 ? '+' : ''}${hot.diff.toFixed(1)}%)`;
+    }
+
+    /**
+     * 대시보드 아이템 카드 렌더링 함수
+     * @param {Array} items - 표시할 아이템 배열
+     * @param {string} color - 테마 색상 (rose/blue)
+     * @param {boolean} isFloor - 저점 여부
+     * @returns {string} 생성된 HTML 문자열
+     */
+    function renderDashItems(items, color, isFloor = false) {
+        if (items.length === 0) return `<div class="p-8 text-center text-slate-600 text-xs">현재 조건에 맞는 항목이 없습니다.</div>`;
+
+        return items.map(item => {
+            const absGap = Math.abs(item.gap);
+            const isStrong = absGap >= 7.0; // 7% 이상 확실한 신호
+            const signalClass = isStrong ? `strong-signal-${color}` : '';
+            const badge = isStrong ? `<span class="signal-badge bg-${color}-500 text-white animate-bounce">Strong</span>` : '';
+
+            return `
+          <div class="flex justify-between items-center p-5 bg-[#0f1115] rounded-2xl border border-slate-800 hover:border-${color}-500/50 cursor-pointer transition-all ${signalClass}" 
+              onclick="showChart('${item.name}', '${item.sheet || item.cat}')">
+            <div>
+              <p class="text-[9px] text-slate-600 font-bold uppercase mb-0.5">${item.cat} ${badge}</p>
+              <p class="font-bold text-slate-200">${item.name}</p>
+            </div>
+            <div class="text-right">
+              <p class="font-mono font-bold text-white">${item.price.toLocaleString()} G</p>
+              <p class="text-[11px] font-black text-${color}-500">
+                Gap ${item.gap > 0 ? '+' : ''}${item.gap.toFixed(1)}%
+              </p>
+            </div>
+          </div>`;
+        }).join('');
+    }
+
+    /**
+     * 특정 카테고리의 리스트 데이터를 로드합니다.
+     * @param {string} catName - SHEET_CONFIG에 정의된 메인 카테고리명
+     */
+    function loadData(catName) {
+        currentMainCat = catName;
+        const tableBody = document.getElementById('table-body');
+        if (tableBody) tableBody.style.opacity = "0.6";
+
+        google.script.run.withSuccessHandler(data => {
+            if (tableBody) tableBody.style.opacity = "1";
+            rawData = data;
+            filterData(currentSub);
+            const itemsForAnalysis = data.items || data;
+            if (Array.isArray(itemsForAnalysis)) updateSynergyIndex(itemsForAnalysis);
+            updateRefreshTimestamp(data.updateTime);
+        }).getListData(catName);
+    }
+
+    function filterData(sub) {
+        currentSub = sub || "전체";
+        const latest = rawData[rawData.length - 1], prev = rawData[rawData.length - 2] || latest;
+        displayItems = Object.keys(latest).filter(h => h !== "일간")
+            .filter(name => currentSub === "전체" || (itemMappingTable[currentSub] || []).some(k => name.includes(k.trim())))
+            .map(name => {
+                const price = latest[name], history = rawData.slice(-7).map(d => d[name] || price);
+                const avg7 = history.reduce((a, b) => a + b, 0) / history.length;
+                return { name, price, prev: prev[name], diff: prev[name] === 0 ? 0 : ((price - prev[name]) / prev[name] * 100), gap: ((price - avg7) / avg7 * 100) };
+            });
+        sortData(sortState.key, true);
+    }
+
+    function sortData(key, isInitial = false) {
+        if (!isInitial) {
+            if (sortState.key === key) sortState.asc = !sortState.asc;
+            else { sortState.key = key; sortState.asc = (key === 'name'); }
+        }
+        displayItems.sort((a, b) => {
+            let v1 = a[key], v2 = b[key];
+            if (typeof v1 === 'string') return sortState.asc ? v1.localeCompare(v2) : v2.localeCompare(v1);
+            return sortState.asc ? v1 - v2 : v2 - v1;
+        });
+
+        // [P1] Smart Re-rendering: 전체 렌더링 대신 Diffing (간소화 버전)
+        // 1. 기존 테이블이 비어있으면 전체 렌더링
+        const tbody = document.getElementById('table-body');
+        if (tbody.children.length === 0) {
+            renderTable();
+            return;
+        }
+
+        // 2. 정렬이나 필터로 인해 순서가 바뀌는 경우:
+        //    간단히 innerHTML 교체하되, 데이터 변경 시각적 피드백(Flash)은 유지하기 어려움.
+        //    하지만 '값'만 바뀌는 경우(Auto Refresh)를 위해 id 매칭 시도 가능.
+        //    여기서는 UI 반응성을 위해 innerHTML 방식을 유지하되 불필요한 레이아웃 Thrashing을 줄이기 위해
+        //    requestAnimationFrame 내에서 처리
+        requestAnimationFrame(() => renderTable());
+    }
+
+    function renderTable() {
+        document.getElementById('table-body').innerHTML = displayItems.map(item => {
+            const isBubble = item.gap > 0;
+            const signalColor = isBubble ? 'rose' : 'emerald';
+            const signalLabel = isBubble ? '거품(Exit)' : '저점(Dip)';
+            const tooltipText = isBubble
+                ? `현재 시세가 7일 평균보다 ${item.gap.toFixed(1)}% 높습니다. 장기 하락 중 일시적 반등일 확률이 높으니 창고 재고 '매도'를 권장합니다.`
+                : `현재 시세가 7일 평균보다 ${Math.abs(item.gap).toFixed(1)}% 낮습니다. 귀속 재료를 '사용'하거나 '매수'하기에 가장 효율적인 지점입니다.`;
+
+            return `
+        <tr class="hover:bg-[#1e222a] cursor-pointer group" onclick="showChart('${item.name}')">
+          <td class="px-8 py-5 font-bold text-slate-300 group-hover:text-purple-400 transition-colors">${item.name}</td>
+          <td class="px-8 py-5 text-right font-mono font-bold text-white">${item.price.toLocaleString()} G</td>
+          <td class="px-8 py-5 text-right font-mono text-slate-500 text-xs">${item.prev.toLocaleString()} G</td>
+          <td class="px-4 py-5 text-center">
+            <div class="tooltip-trigger inline-block">
+              <span class="px-2 py-1 rounded-md text-[9px] font-black min-w-[75px] bg-${signalColor}-500/10 text-${signalColor}-500">
+                ${signalLabel} ${Math.abs(item.gap).toFixed(1)}%
+              </span>
+              <div class="tooltip-content"><strong>💡 로아 마켓 가이드</strong><br>${tooltipText}</div>
+            </div>
+          </td>
+          <td class="px-8 py-5 text-center font-bold ${item.diff > 0 ? 'text-rose-500' : (item.diff < 0 ? 'text-blue-500' : 'text-slate-500')} text-[11px]">
+            ${item.diff > 0 ? '▲' : (item.diff < 0 ? '▼' : '')} ${Math.abs(item.diff).toFixed(2)}%
+          </td>
+        </tr>`;
+        }).join('');
+    }
+
+    /**
+     * 상세 정보창(모달)을 실행합니다.
+     * @param {string} name - 아이템명
+     * @param {string} overrideCat - (선택) 호출 시 명시할 카테고리/시트명
+     */
+    function showChart(name, overrideCat) {
+        // 전역 변수 currentMainCat보다 명시적으로 넘어온 overrideCat을 우선함
+        const targetCat = overrideCat || currentMainCat;
+        if (!targetCat) {
+            console.error("카테고리 정보가 없어 요청을 중단합니다.");
+            return;
+        }
+
+        document.getElementById('modalTitle').innerText = name;
+        const modal = document.getElementById('chartModal');
+        const skeleton = document.getElementById('skeletonView');
+        const realView = document.getElementById('realView');
+
+        modal.style.display = 'block';
+        skeleton.classList.remove('hidden');
+        realView.classList.add('hidden', 'opacity-0'); // 페이드인 준비
+
+        google.script.run.withSuccessHandler(detailData => {
+            // 빈 배열 응답 처리 v2
+            if (!detailData || detailData.length === 0) {
+                alert("해당 아이템의 상세 데이터를 찾을 수 없습니다.");
+                return;
+            }
+
+            fullDetailData = detailData; // 전역 저장
+            currentViewMode = 'GOLD'; // 리셋
+            currentQuotes = detailData.quotes;
+
+            updateRealValue(
+                detailData[detailData.length - 1].value,
+                Math.max(detailData[detailData.length - 2].value, 1),
+                detailData.quotes
+            );
+            changePeriod(0);
+
+            skeleton.classList.add('hidden');
+            realView.classList.remove('hidden');
+            setTimeout(() => realView.classList.remove('opacity-0'), 50);
+
+        }).withFailureHandler(err => {
+            console.error(err);
+            showToast("데이터 로드 실패: " + err.message, 'error');
+            closeModal();
+        }).getDetailData(targetCat, name);
+    }
+
+    function changePeriod(days) {
+        document.querySelectorAll('.period-btn').forEach(btn => {
+            btn.classList.toggle('active', (days == 7 && btn.innerText == '7D') || (days == 30 && btn.innerText == '30D') || (days == 90 && btn.innerText == '90D') || (days == 0 && btn.innerText == 'ALL'));
+        });
+        const filtered = days === 0 ? fullDetailData : fullDetailData.slice(-days);
+        renderChart(filtered.map(d => d.date), filtered.map(d => d.value));
+    }
+
+    function updateDynamicStats() {
+        if (!myChart) return;
+        const isRealMode = currentViewMode === 'REAL';
+        const x = myChart.scales.x, startIdx = Math.max(0, Math.floor(x.min)), endIdx = Math.min(myChart.data.labels.length - 1, Math.ceil(x.max));
+        const p = myChart.data.datasets[0].data.slice(startIdx, endIdx + 1), labels = myChart.data.labels.slice(startIdx, endIdx + 1);
+        if (p.length < 2) return;
+
+        const cur = p[p.length - 1], ma7 = p.length >= 7 ? p.slice(-7).reduce((a, b) => a + b, 0) / 7 : p.reduce((a, b) => a + b, 0) / p.length;
+        const momentum = ((p[p.length - 1] * 0.6) + (p[p.length - 2] * 0.4)) / ((p[p.length - 2] * 0.6) + (p[p.length - 3] * 0.4 || 1)) - 1;
+        const trendEl = document.getElementById('trend-signal'), badge = document.getElementById('sales-badge'), trendContent = document.getElementById('trend-content');
+
+        let status = (momentum > 0.005 && cur > ma7) ? "EXIT" : ((momentum < -0.015) ? "CRASH" : "STABLE");
+
+        if (status === "EXIT") {
+            trendEl.className = "tooltip-trigger p-4 rounded-[22px] border border-rose-500/40 bg-[#0f1115] flex flex-col items-center justify-center min-h-[85px]";
+            trendContent.innerHTML = `<span class="text-rose-500 text-[9px] font-black uppercase mb-1 tracking-[0.2em]">High Opportunity</span><span class="text-xl font-black text-white italic">EXIT</span>`;
+            badge.innerText = "매도 기회"; badge.className = "px-2 py-0.5 rounded text-[9px] font-bold bg-rose-500/20 text-rose-500";
+        } else if (status === "CRASH") {
+            trendEl.className = "tooltip-trigger p-4 rounded-[22px] border border-blue-500/40 bg-[#0f1115] flex flex-col items-center justify-center min-h-[85px]";
+            trendContent.innerHTML = `<span class="text-blue-500 text-[9px] font-black uppercase mb-1 tracking-[0.2em]">Fast Decay</span><span class="text-xl font-black text-white italic">CRASH</span>`;
+            badge.innerText = "급락 위험"; badge.className = "px-2 py-0.5 rounded text-[9px] font-bold bg-blue-500/20 text-blue-500";
+        } else {
+            trendEl.className = "tooltip-trigger p-4 rounded-[22px] border border-slate-800 bg-[#0f1115] flex flex-col items-center justify-center min-h-[85px]";
+            trendContent.innerHTML = `<span class="text-slate-500 text-[9px] font-black uppercase mb-1 tracking-[0.2em]">Default Drift</span><span class="text-xl font-black text-white italic">STABLE</span>`;
+            badge.innerText = "관망/사용"; badge.className = "px-2 py-0.5 rounded text-[9px] font-bold bg-slate-700 text-slate-300";
+        }
+
+        const dayStats = {}; labels.forEach((label, i) => {
+            const match = label.match(/\(([^)]+)\)/); if (match) {
+                let d = match[1]; const map = { 'Sun': '일', 'Mon': '월', 'Tue': '화', 'Wed': '수', 'Thu': '목', 'Fri': '금', 'Sat': '토' };
+                d = map[d] || d; if (!dayStats[d]) dayStats[d] = { sum: 0, count: 0 }; dayStats[d].sum += p[i]; dayStats[d].count++;
+            }
+        });
+        let bestDayStr = "--", maxAvg = 0; Object.keys(dayStats).forEach(d => { const avg = dayStats[d].sum / dayStats[d].count; if (avg > maxAvg) { maxAvg = avg; bestDayStr = d + "요일"; } });
+        document.getElementById('best-day').innerText = bestDayStr;
+        document.getElementById('momentum-val').innerText = (momentum > 0 ? "+" : "") + (momentum * 100).toFixed(1) + "%";
+
+        const fmt = (num) => isRealMode ? num.toFixed(2) : Math.round(num).toLocaleString();
+        const max = Math.max(...p), min = Math.min(...p), avg = Math.round(p.reduce((a, b) => a + b, 0) / p.length);
+        document.getElementById('stat-cards').innerHTML = `
+        <div class="bg-[#0f1115] p-4 rounded-2xl border border-slate-800 text-center"><p class="text-[9px] text-rose-500 font-black mb-1 uppercase opacity-60">Peak</p><p class="text-lg font-black font-mono text-white">${fmt(max).toLocaleString()}</p></div>
+        <div class="bg-[#0f1115] p-4 rounded-2xl border border-slate-800 text-center"><p class="text-[9px] text-blue-500 font-black mb-1 uppercase opacity-60">Floor</p><p class="text-lg font-black font-mono text-white">${fmt(min).toLocaleString()}</p></div>
+        <div class="bg-[#0f1115] p-4 rounded-2xl border border-slate-800 text-center"><p class="text-[9px] text-slate-500 font-black mb-1 uppercase opacity-60">Avg</p><p class="text-lg font-black font-mono text-white">${fmt(avg).toLocaleString()}</p></div>
+        <div class="bg-purple-500/10 p-4 rounded-2xl border border-purple-500/30 text-center"><p class="text-[9px] text-purple-400 font-black mb-1 uppercase">Latest</p><p class="text-lg font-black font-mono text-white">${fmt(cur).toLocaleString()}</p></div>`;
+        document.getElementById('modalPeriod').innerText = `Range: ${getKrDay(labels[0])} ~ ${getKrDay(labels[labels.length - 1])}`;
+    }
+
+    /**
+     * 섹터 내 아이템들의 평균 Gap을 계산하여 시장 분위기를 상세화함
+     */
+    function updateSynergyIndex(items) {
+        const targets = ['main-synergy-index', 'synergy-index'];
+        if (!items || items.length === 0) return;
+
+        const avgGap = items.reduce((acc, item) => acc + parseFloat(item.gap || 0), 0) / items.length;
+        let status = 'STABLE', color = 'text-slate-400', icon = '⚖️';
+
+        if (avgGap > 4.5) { status = 'HOT'; color = 'text-rose-400'; icon = '🔥'; }
+        else if (avgGap < -4.5) { status = 'PANIC'; color = 'text-blue-400'; icon = '😨'; }
+
+        const htmlContent = `<span class="${color} font-black uppercase">${icon} ${status} (${avgGap > 0 ? '+' : ''}${avgGap.toFixed(1)}%)</span>`;
+
+        targets.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.innerHTML = htmlContent;
+        });
+    }
+
+    /**
+     * 실질 가치 계산 및 UI 주입
+     * @param {number} currentPrice - 현재 아이템 골드 가격
+     * @param {number} exchangeRate - 화폐 거래소 시세 (예: 2850)
+     */
+    function updateRealValue(currentPrice, prevPrice, exchangeRate = 2850) {
+        const el = document.getElementById('real-value-num');
+        if (!el) return;
+
+        // 환산: (아이템가격 / 환율) * 100 (100BC당 가격 기준일 경우)
+        const currentBC = (currentPrice / exchangeRate) * 100;
+        const prevBC = (prevPrice / exchangeRate) * 100;
+
+        el.innerText = currentBC.toFixed(2);
+        el.classList.add('animate-pulse');
+        setTimeout(() => el.classList.remove('animate-pulse'), 1000);
+
+        // 시니어급 인사이트: 골드는 올랐는데 실질 가치는 떨어졌을 때 경고
+        const goldDiff = ((currentPrice - prevPrice) / prevPrice) * 100;
+        const bcDiff = ((currentBC - prevBC) / prevBC) * 100;
+        if (goldDiff > 0 && bcDiff < -2) {
+            console.warn("⚠️ 골드 가치 하락에 의한 착시 현상 감지");
+            // UI에 "인플레 주의" 배지 등을 추가로 띄울 수 있음
+        }
+    }
+
+    /**
+     * 아이템 시세 차트 및 MA7 추세선을 렌더링합니다.
+     * @param {Array<string>} labels - 날짜 배열
+     * @param {Array<number>} prices - 가격 배열
+     */
+    function renderChart(labels, prices) {
+        const ctx = document.getElementById('itemChart').getContext('2d');
+
+        // [P1] Memory Leak Prevention: 차트 인스턴스 및 캔버스 초기화
+        if (myChart) {
+            myChart.destroy();
+            myChart = null;
+        }
+        // Canvas Clear (잔상 제거 및 메모리 해제 도움)
+        ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+        const bcRate = (currentQuotes && currentQuotes.BC_PER_GOLD) ? currentQuotes.BC_PER_GOLD : 7000;
+
+        // 1. 모드에 따른 데이터 변환 (GOLD or REAL)
+        const isRealMode = currentViewMode === 'REAL';
+        const displayPrices = isRealMode ? prices.map(p => (p / bcRate) * 100) : prices;
+        const unit = isRealMode ? 'BC' : 'G';
+        const themeColor = isRealMode ? '#10b981' : '#a855f7'; // 에메랄드(REAL) vs 퍼플(GOLD)
+        const areaColor = isRealMode ? 'rgba(16, 185, 129, 0.05)' : 'rgba(168, 85, 247, 0.05)';
+
+        // 1. MA7 (7-Day Moving Average) 데이터 계산
+        // const ma7Data = prices.map((_, idx, arr) => {
+        //   const windowSize = 7;
+        //   const start = Math.max(0, idx - windowSize + 1);
+        //   const subset = arr.slice(start, idx + 1);
+        //   const sum = subset.reduce((a, b) => a + b, 0);
+        //   return subset.length > 0 ? (sum / subset.length) : null;
+        // });
+
+        // MA7 계산 v2
+        const ma7Data = displayPrices.map((_, idx, arr) => {
+            const windowSize = 6;
+            const subset = arr.slice(Math.max(0, idx - windowSize), idx + 1);
+            return subset.reduce((a, b) => a + b, 0) / subset.length;
+        });
+
+        if (myChart) myChart.destroy();
+
+        myChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                // datasets: [
+                //   {
+                //     // 메인 시세 데이터
+                //     label: '현재 시세',
+                //     data: prices,
+                //     borderColor: '#a855f7',
+                //     borderWidth: 3,
+                //     pointRadius: 0,
+                //     hoverRadius: 6,
+                //     hoverBackgroundColor: '#a855f7',
+                //     fill: true,
+                //     backgroundColor: 'rgba(168, 85, 247, 0.05)',
+                //     tension: 0.3,
+                //     order: 1 // 숫자가 작을수록 위로 올라옴
+                //   },
+                //   {
+                //     // MA7 추세선
+                //     label: '7일 평균(MA7)',
+                //     data: ma7Data,
+                //     borderColor: 'rgba(255, 255, 255, 0.3)', // 차분한 투명 흰색
+                //     borderWidth: 1.5,
+                //     borderDash: [5, 5], // 점선 처리로 메인 데이터와 구분
+                //     pointRadius: 0,
+                //     fill: false,
+                //     tension: 0.4,
+                //     order: 2
+                //   }
+                // ]
+                datasets: [
+                    // { 
+                    //   label: '현재가',
+                    //   data: prices,
+                    //   borderColor: '#a855f7',
+                    //   borderWidth: 3,
+                    //   pointRadius: 0,
+                    //   tension: 0.3,
+                    //   fill: true,
+                    //   backgroundColor: 'rgba(168, 85, 247, 0.05)',
+                    //   order: 1
+                    // },
+                    {
+                        label: isRealMode ? '실질가치(BC)' : '현재가(G)',
+                        data: displayPrices,
+                        borderColor: themeColor,
+                        borderWidth: 3,
+                        pointRadius: 0,
+                        tension: 0.3,
+                        fill: true,
+                        backgroundColor: areaColor,
+                        order: 1
+                    },
+                    {
+                        label: isRealMode ? '실질추세(MA7)' : '7일 평균(MA7)',
+                        data: ma7Data,
+                        borderColor: isRealMode ? 'rgba(16, 185, 129, 0.3)' : 'rgba(148, 163, 184, 0.4)',
+                        borderWidth: 1.5,
+                        borderDash: [5, 5],
+                        pointRadius: 0,
+                        tension: 0.4,
+                        order: 2
+                    },
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { display: false },
+                    // 2. 크로스헤어: 마우스 위치에 따라 십자 가이드라인 표시
+                    crosshair: true,
+                    // 3. 툴팁 설정: 마우스를 올렸을 때 나타나는 정보창
+                    tooltip: {
+                        enabled: true,
+                        backgroundColor: 'rgba(15, 17, 21, 0.95)',
+                        padding: 16,
+                        cornerRadius: 16,
+                        borderColor: themeColor + '40',
+                        borderWidth: 1,
+                        callbacks: {
+                            title: (items) => getKrDay(items[0].label),
+                            label: (ctx) => {
+                                const label = ctx.dataset.label;
+                                const value = ctx.raw;
+                                // 실질 가치는 소수점 2자리까지, 골드는 정수 표기
+                                const formattedValue = isRealMode ? value.toFixed(2) : Math.round(value).toLocaleString();
+                                return ` ${label}: ${formattedValue} ${unit}`;
+                            }
+                        }
+                    },
+                    // tooltip: {
+                    //   enabled: true,
+                    //   backgroundColor: 'rgba(15, 17, 21, 0.95)',
+                    //   padding: 16,
+                    //   cornerRadius: 16,
+                    //   borderColor: 'rgba(168, 85, 247, 0.3)',
+                    //   borderWidth: 1,
+                    //   displayColors: true, // 데이터셋 색상(보라색/회색) 표시
+                    //   boxPadding: 6,
+                    //   callbacks: {
+                    //     // 제목: 요일이 포함된 한국어 날짜 표시
+                    //     title: (items) => getKrDay(items[0].label),
+                    //     // 내용: 현재가와 MA7을 구분하여 출력
+                    //     label: (ctx) => {
+                    //       const label = ctx.dataset.label;
+                    //       const value = ctx.raw;
+                    //       // 숫자는 반올림하여 천단위 콤마 표시
+                    //       return ` ${label}: ${Math.round(value).toLocaleString()} G`;
+                    //     }
+                    //   }
+                    // },
+                    // 4. 줌/팬 설정: 차트 확대 및 이동
+                    zoom: {
+                        zoom: {
+                            wheel: { enabled: true },
+                            pinch: { enabled: true },
+                            mode: 'x', // 가로축 기준 확대
+                            onZoomComplete: () => updateDynamicStats() // 확대 후 통계 카드 갱신
+                        },
+                        pan: {
+                            enabled: true,
+                            mode: 'x',
+                            onPanComplete: () => updateDynamicStats() // 이동 후 통계 카드 갱신
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        grid: { color: 'rgba(255,255,255,0.03)' },
+                        ticks: {
+                            color: '#475569',
+                            font: { size: 10 },
+                            callback: (val) => isRealMode ? val.toFixed(1) : val.toLocaleString()
+                        }
+                    },
+                    x: {
+                        grid: { display: false },
+                        ticks: {
+                            color: '#475569',
+                            maxTicksLimit: 8,
+                            font: { size: 10 },
+                            callback: function (v) { return getKrDay(this.getLabelForValue(v)); }
+                        }
+                    }
+                }
+            },
+            plugins: [crosshairPlugin]
+        });
+
+        updateDynamicStats();
+    }
+
+    function switchChartMode(mode) {
+        currentViewMode = mode;
+
+        // UI 상태 변경
+        const isGold = mode === 'GOLD';
+        document.getElementById('btn-gold').className = `px-3 py-1.5 rounded-lg text-[9px] font-black ${isGold ? 'bg-slate-800 text-white' : 'text-slate-500'}`;
+        document.getElementById('btn-real').className = `px-3 py-1.5 rounded-lg text-[9px] font-black ${!isGold ? 'bg-slate-800 text-white' : 'text-slate-500'}`;
+
+        // 차트 리렌더링 (동일 데이터로 환산 처리)
+        changePeriod(0);
+    }
+
+    function renderSubNav(config) {
+        const s = document.getElementById('sub-nav');
+        s.innerHTML = config.subs.map(sub => `<button onclick="handleSubClick(this, '${sub}')" class="sub-btn px-4 py-1.5 rounded-full bg-[#1c1f26] text-[10px] font-black border border-slate-700 text-slate-500 uppercase transition-all">${sub}</button>`).join('');
+        const f = s.querySelector('.sub-btn'); if (f) f.classList.add('sub-active');
+    }
+
+    function handleSubClick(b, s) {
+        document.querySelectorAll('.sub-btn').forEach(x => x.classList.remove('sub-active'));
+        b.classList.add('sub-active');
+        filterData(s);
+    }
+
+    function closeModal() {
+        // [P1] Memory Leak Prevention: 모달 닫을 때 차트 파괴
+        if (myChart) {
+            myChart.destroy();
+            myChart = null;
+        }
+        document.getElementById('chartModal').style.display = 'none';
+    }
+
+    /**
+     * [P0 Improvement] 사용자 피드백을 위한 Toast 메시지 표시
+     * @param {string} message - 표시할 메시지
+     * @param {string} type - 'error' | 'success'
+     */
+    function showToast(message, type = 'error') {
+        const toast = document.createElement('div');
+        toast.className = `toast toast-${type}`;
+        toast.innerText = message;
+        document.body.appendChild(toast);
+
+        // 애니메이션 효과
+        setTimeout(() => toast.classList.add('show'), 100);
+        setTimeout(() => {
+            toast.classList.remove('show');
+            setTimeout(() => toast.remove(), 300);
+        }, 3000);
+    }
+</script>
