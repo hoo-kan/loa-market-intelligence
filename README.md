@@ -126,6 +126,12 @@
 
 ---
 
+## License
+
+열람·참고 목적으로 공개합니다 — 별도 라이선스를 부여하지 않습니다.
+
+---
+
 ## Author
 
 - GitHub [@hoo-kan](https://github.com/hoo-kan)
