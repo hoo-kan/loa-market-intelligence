@@ -128,11 +128,11 @@ function getDashboardData() {
 /**
  * 특정 카테고리의 최신 8행 데이터를 가져옵니다.
  * @param {string} catName - SHEET_CONFIG에 정의된 카테고리명
- * @return {Object[]} 날짜 및 아이템 가격 정보를 담은 객체 배열
+ * @return {Object} { items: Object[], updateTime: string } — 행 배열과 갱신 시각
  */
 function getListData(catName) {
   const cache = CacheService.getScriptCache();
-  const cacheKey = "LIST_V16_" + catName;
+  const cacheKey = "LIST_V17_" + catName; // V17: 응답을 객체 계약으로 전환 (구 배열 캐시와 분리)
   const cached = cache.get(cacheKey);
   if (cached) return JSON.parse(cached);
 
@@ -165,12 +165,17 @@ function getListData(catName) {
       return obj;
     });
 
-    if (result.length > 0) cache.put(cacheKey, JSON.stringify(result), BUSINESS_RULES.CACHE.TTL_SECONDS);
-    result.updateTime = Utilities.formatDate(new Date(), "GMT+9", "HH:mm:ss");
-    return result;
-  } catch (e) { 
+    // 캐시 적중 응답과 신규 응답의 필드가 일치하도록, 부가 필드까지 채운 뒤 캐싱.
+    // 배열에 붙인 프로퍼티는 JSON 직렬화에서 소실된다 — getDashboardData 와 동일한 객체 계약.
+    const payload = {
+      items: result,
+      updateTime: Utilities.formatDate(new Date(), "GMT+9", "HH:mm:ss")
+    };
+    if (result.length > 0) cache.put(cacheKey, JSON.stringify(payload), BUSINESS_RULES.CACHE.TTL_SECONDS);
+    return payload;
+  } catch (e) {
     console.error(catName + " 로드 실패: " + e.message);
-    return []; 
+    return [];
   }
 }
 
@@ -179,12 +184,12 @@ function getListData(catName) {
  * 
  * @param {string} catName - SHEET_CONFIG에 정의된 카테고리명 (예: "강화 재료")
  * @param {string} itemName - 아이템 정확한 이름 (예: "운명의 파편 주머니(대)")
- * @returns {Array<{date: string, value: number}>} 날짜별 가격 배열
+ * @returns {Object} { items: Array<{date, value}>, updateTime, eventMultiplier, quotes }
  * @throws {Error} 시트 접근 실패 또는 아이템 미존재 시
  */
 function getDetailData(catName, itemName) {
   const cache = CacheService.getScriptCache();
-  const cacheKey = `DETAIL_V16_${catName}_${itemName.replace(/\s/g, '_')}`;
+  const cacheKey = `DETAIL_V17_${catName}_${itemName.replace(/\s/g, '_')}`; // V17: 객체 계약
   const cached = cache.get(cacheKey);
   if (cached) return JSON.parse(cached);
 
@@ -208,11 +213,16 @@ function getDetailData(catName, itemName) {
         value: Math.round(Number(row[itemIdx])) || 0
       })).filter(d => d.value > 0);
 
-    if (result.length > 0) cache.put(cacheKey, JSON.stringify(result), BUSINESS_RULES.CACHE.TTL_SECONDS);
-    result.updateTime = Utilities.formatDate(new Date(), "GMT+9", "HH:mm:ss");
-    result.eventMultiplier = getEventMultiplier();
-    result.quotes = getExchangeRate();
-    return result;
+    // getListData 와 동일 — 부가 필드(quotes 등)까지 채운 객체를 캐싱해,
+    // 캐시 적중 시에도 REAL(BC) 모드 환율이 소실되지 않게 한다.
+    const payload = {
+      items: result,
+      updateTime: Utilities.formatDate(new Date(), "GMT+9", "HH:mm:ss"),
+      eventMultiplier: getEventMultiplier(),
+      quotes: getExchangeRate()
+    };
+    if (result.length > 0) cache.put(cacheKey, JSON.stringify(payload), BUSINESS_RULES.CACHE.TTL_SECONDS);
+    return payload;
   } catch (e) {
     console.error(`Detail Load Error [${catName}/${itemName}]: ${e.message}`);
     return [];
@@ -231,13 +241,13 @@ function getEventMultiplier() {
 }
 
 /**
- * 골드 환산 실질 가치 계산용 기준 데이터
- * (실제 구현 시 화폐거래소 API나 특정 시트에서 가져오도록 확장 가능)
+ * 골드 환산 실질 가치 계산용 기준 시세 (블루 크리스탈 100개당 골드)
+ * @return {number} 환율 — 클라이언트 updateRealValue 와 같은 숫자 계약
  */
 function getExchangeRate() {
-  // 예시: 블루 크리스탈 100개당 골드 가격
-  // 이 수치는 별도의 시트에서 실시간 갱신된 값을 가져오는 것을 권장합니다.
-  return 7000; 
+  // 발췌 공개본은 고정 예시값을 쓴다 — 실시간 시세 참조는 배포 환경 종속
+  // 설정에 속해 공개 범위에서 제외했다 (README '공개 범위').
+  return 7000;
 }
 
 /**

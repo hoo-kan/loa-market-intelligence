@@ -242,10 +242,9 @@
 
         google.script.run.withSuccessHandler(data => {
             if (tableBody) tableBody.style.opacity = "1";
-            rawData = data;
+            rawData = data.items || data; // 객체 계약 { items, updateTime } — 구 배열 응답도 수용
             filterData(currentSub);
-            const itemsForAnalysis = data.items || data;
-            if (Array.isArray(itemsForAnalysis)) updateSynergyIndex(itemsForAnalysis);
+            if (Array.isArray(rawData)) updateSynergyIndex(rawData);
             updateRefreshTimestamp(data.updateTime);
         }).getListData(catName);
     }
@@ -342,19 +341,20 @@
         realView.classList.add('hidden', 'opacity-0'); // 페이드인 준비
 
         google.script.run.withSuccessHandler(detailData => {
-            // 빈 배열 응답 처리 v2
-            if (!detailData || detailData.length === 0) {
+            // 객체 계약 { items, updateTime, eventMultiplier, quotes } — 빈/구 배열 응답도 수용
+            const items = detailData.items || detailData;
+            if (!items || items.length === 0) {
                 alert("해당 아이템의 상세 데이터를 찾을 수 없습니다.");
                 return;
             }
 
-            fullDetailData = detailData; // 전역 저장
+            fullDetailData = items; // 전역 저장
             currentViewMode = 'GOLD'; // 리셋
             currentQuotes = detailData.quotes;
 
             updateRealValue(
-                detailData[detailData.length - 1].value,
-                Math.max(detailData[detailData.length - 2].value, 1),
+                items[items.length - 1].value,
+                Math.max(items[items.length - 2].value, 1),
                 detailData.quotes
             );
             changePeriod(0);
@@ -449,9 +449,9 @@
     /**
      * 실질 가치 계산 및 UI 주입
      * @param {number} currentPrice - 현재 아이템 골드 가격
-     * @param {number} exchangeRate - 화폐 거래소 시세 (예: 2850)
+     * @param {number} exchangeRate - 화폐 거래소 시세 — 서버 getExchangeRate 와 동일 기본값
      */
-    function updateRealValue(currentPrice, prevPrice, exchangeRate = 2850) {
+    function updateRealValue(currentPrice, prevPrice, exchangeRate = 7000) {
         const el = document.getElementById('real-value-num');
         if (!el) return;
 
@@ -488,7 +488,7 @@
         // Canvas Clear (잔상 제거 및 메모리 해제 도움)
         ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
-        const bcRate = (currentQuotes && currentQuotes.BC_PER_GOLD) ? currentQuotes.BC_PER_GOLD : 7000;
+        const bcRate = (typeof currentQuotes === 'number' && currentQuotes > 0) ? currentQuotes : 7000; // 서버 getExchangeRate 와 숫자 계약
 
         // 1. 모드에 따른 데이터 변환 (GOLD or REAL)
         const isRealMode = currentViewMode === 'REAL';

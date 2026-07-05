@@ -90,6 +90,17 @@
 
 ---
 
+## 직접 실행하기 (최소 경로)
+
+공개 범위 제외분(시트 ID·비즈니스 규칙) 때문에 전체 시스템 재현은 어렵지만, 수집 코어는 다음 순서로 동작을 확인할 수 있습니다.
+
+1. [Apps Script](https://script.google.com) 새 프로젝트에 `packages/loapi-core`와 `apps/data-worker-example` 파일을 추가.
+2. 프로젝트 설정 → 스크립트 속성에 `LOSTARK_API_KEY` 등록 ([로스트아크 개발자 포털](https://developer-lostark.game.onstove.com)에서 무료 발급).
+3. 수집 대상 시트를 하나 만들어 워커의 시트 참조를 연결.
+4. `Service_Optimizer.gs`의 `setupAutoTrigger()`를 1회 실행 — 5분 주기 트리거가 등록되고 수집이 시작됩니다.
+
+---
+
 ## 데이터 구조
 
 실제 데이터 시트를 **뷰어 전용(읽기 전용)**으로 공개합니다.
